@@ -12,6 +12,15 @@ echo "Cleaning up vLLM Disaggregated Serving"
 echo "=========================================="
 echo ""
 
+# Stop Prometheus and Grafana containers
+echo "Stopping Prometheus and Grafana..."
+if command -v podman &>/dev/null; then
+    podman stop prometheus grafana 2>/dev/null && echo "  ✓ Monitoring containers stopped" \
+        || echo "  ℹ No monitoring containers running"
+else
+    echo "  ℹ podman not found — skipping monitoring cleanup"
+fi
+
 # Kill all vLLM processes
 echo "Stopping vLLM processes..."
 pkill -9 -f "vllm serve" 2>/dev/null

@@ -288,3 +288,20 @@ echo "    -d '{\"model\": \"$MODEL\", \"prompt\": \"Hello, my name is\", \"max_t
 echo ""
 echo "To stop all servers, run: ./cleanup.sh"
 echo ""
+
+# =============================================================================
+# Start Monitoring (Prometheus + Grafana via podman)
+# =============================================================================
+MONITORING_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/prometheus_grafana"
+if command -v podman &>/dev/null && [[ -f "$MONITORING_DIR/start_monitoring.sh" ]]; then
+    echo "Starting Prometheus and Grafana..."
+    pushd "$MONITORING_DIR" >/dev/null
+    bash start_monitoring.sh
+    popd >/dev/null
+    echo "  Prometheus : http://localhost:9090"
+    echo "  Grafana    : http://localhost:3000  (admin / admin)"
+else
+    echo "[skip] podman not found or start_monitoring.sh missing — skipping monitoring startup."
+    echo "       To start manually: cd prometheus_grafana && bash start_monitoring.sh"
+fi
+echo ""
