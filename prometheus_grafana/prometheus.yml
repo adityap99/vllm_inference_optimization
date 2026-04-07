@@ -1,0 +1,32 @@
+global:
+  scrape_interval: 5s
+
+# Template using ONLY environment variables already defined in startup.sh:
+#   PREFILL_PORT, DECODE_PORT, PROXY_HTTP_PORT
+# (MODEL, GPU vars, KV ports are not needed for scraping)
+# Host is fixed to localhost since servers bind 0.0.0.0.
+#
+# Generate concrete file:
+#   export PREFILL_PORT=20011
+#   export DECODE_PORT=20012
+#   export PROXY_HTTP_PORT=10005   # optional if you want proxy metrics
+#   envsubst < prometheus.yml.template > prometheus.yml
+
+scrape_configs:
+  - job_name: 'vllm-prefill'
+    static_configs:
+      - targets: ['localhost:${PREFILL_PORT:-20011}']
+        labels:
+          instance: 'prefill'
+
+  - job_name: 'vllm-decode'
+    static_configs:
+      - targets: ['localhost:${DECODE_PORT:-20012}']
+        labels:
+          instance: 'decode'
+
+  - job_name: 'vllm-proxy'
+    static_configs:
+      - targets: ['localhost:${PROXY_HTTP_PORT:-10005}']
+        labels:
+          instance: 'proxy'

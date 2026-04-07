@@ -1,0 +1,25 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 30s
+
+scrape_configs:
+  - job_name: 'vllm-prefill'
+    static_configs:
+      - targets: ['localhost:20098']
+        labels:
+          instance: 'prefill'
+          role: 'prefill'
+
+  - job_name: 'vllm-decode'
+    static_configs:
+      - targets: ['localhost:20099']
+        labels:
+          instance: 'decode'
+          role: 'decode'
+
+  - job_name: 'vllm-proxy'
+    static_configs:
+      - targets: ['localhost:10099']
+        labels:
+          instance: 'proxy'
+          role: 'proxy'
