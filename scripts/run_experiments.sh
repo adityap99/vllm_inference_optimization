@@ -251,9 +251,10 @@ run_experiment() {
     proxy_start_line=$(wc -l < "$PROXY_LOG" 2>/dev/null || echo 0)
 
     # Capture wall-clock start time (Unix epoch in both seconds and ms for Prometheus/Grafana)
-    local start_epoch start_epoch_ms
+    local start_epoch start_epoch_ms start_iso
     start_epoch=$(date +%s)
     start_epoch_ms=$(( start_epoch * 1000 ))
+    start_iso=$(date -Iseconds)
 
     # Post Grafana start-of-region annotation
     grafana_annotate "START: ${name}" "\"experiment\",\"start\",\"${name}\"" "${start_epoch_ms}"
@@ -294,7 +295,7 @@ EOF
     cat > "$result_dir/metadata.json" <<EOF
 {
   "experiment": "$name",
-  "start_time": "$(date -Iseconds)",
+  "start_time": "$start_iso",
   "end_time": "$(date -Iseconds)",
   "start_epoch": $start_epoch,
   "end_epoch": $end_epoch,

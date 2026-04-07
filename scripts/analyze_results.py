@@ -723,15 +723,19 @@ def _load_metadata_epoch(results_dir: str, cond: str) -> tuple[int, int] | tuple
         return None, None
 
 
+# Label values come from prometheus_pd_host.yaml static_configs.labels —
+# those override the default instance label (which would be 'localhost:20099').
+# Confirmed by the Grafana dashboard which uses role/lane labels, not port.
 ITL_PROMQL = (
     'histogram_quantile(0.99, sum(rate('
-    'vllm:inter_token_latency_seconds_bucket{{instance=~".*:{port}"}}[30s]'
+    'vllm:inter_token_latency_seconds_bucket{{instance="{instance}"}}[30s]'
     ')) by (le)) * 1000'
 )
-KV_PROMQL = 'vllm:kv_cache_usage_perc{{instance=~".*:{port}"}}'
+KV_PROMQL = 'vllm:kv_cache_usage_perc{{instance="{instance}"}}'
 
-# Fast-Lane decode server port (primary metrics target for ITL)
-FAST_DECODE_PORT = "20099"
+# Prometheus instance label for the fast-decode server
+# (set by the 'instance: fast-decode' label in prometheus_pd_host.yaml)
+FAST_DECODE_INSTANCE = "fast-decode"
 
 
 def plot_itl_timeseries(
@@ -751,7 +755,7 @@ def plot_itl_timeseries(
         ("migration_straggler", "Straggler + migration"),
     ]
 
-    promql = ITL_PROMQL.format(port=FAST_DECODE_PORT)
+    promql = ITL_PROMQL.format(instance=FAST_DECODE_INSTANCE)
 
     fig, ax = plt.subplots(figsize=(13, 5))
     any_plotted = False
@@ -811,7 +815,7 @@ def plot_kv_cache_timeseries(
         ("migration_straggler", "Straggler + migration"),
     ]
 
-    promql = KV_PROMQL.format(port=FAST_DECODE_PORT)
+    promql = KV_PROMQL.format(instance=FAST_DECODE_INSTANCE)
 
     fig, ax = plt.subplots(figsize=(13, 5))
     any_plotted = False
