@@ -181,6 +181,243 @@ curl -X POST http://localhost:10099/v1/completions \
 
 ---
 
+## End-to-End Workflow
+
+This section covers the complete lifecycle — from a fresh checkout through results analysis — for both the automated PACE/SLURM path and the interactive manual path.
+
+### 1. One-Time Setup (Prerequisites)
+
+**Hardware requirements**
+
+- 1 node with 4× NVIDIA GPU (H100 80GB or A100 80GB SXM4 recommended)
+- GPUs must be on the same node with NVLink/NVSwitch (P2pNcclConnector requires same-node NCCL P2P)
+
+**Clone the repository**
+
+```bash
+git clone https://github.com/YOUR_ORG/vllm_inference_optimization.git
+cd vllm_inference_optimization
+```
+
+**Create and activate the conda environment**
+
+```bash
+# Create a new environment (replace <env_path> with your scratch/env path)
+conda create -p /path/to/scratch/envs/sysml_research4 python=3.10 -y
+conda activate /path/to/scratch/envs/sysml_research4
+
+# Install all dependencies
+pip install -r requirements.txt
+```
+
+> On PACE, use `$SCRATCH` or `/storage/scratch1/$USER` as your scratch root — home directory quotas are too small for model weights and environment packages.
+
+**HuggingFace token and model access**
+
+`meta-llama/Llama-2-13b-hf` is a gated model. You need to:
+1. Accept the license at [huggingface.co/meta-llama/Llama-2-13b-hf](https://huggingface.co/meta-llama/Llama-2-13b-hf)
+2. Create a HF access token at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens)
+3. Export it in your shell or `~/.bashrc`:
+
+```bash
+export HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxx
+```
+
+The first `./startup.sh` invocation will trigger a model download (~26 GB) if weights are not already cached in `$HF_HOME`.
+
+---
+
+### 2. Path A — Automated PACE/SLURM Job (Recommended)
+
+This is the end-to-end automated path: one `sbatch` command runs startup, all five experiment conditions, result analysis, and cleanup.
+
+**Step 1: Configure the SLURM script**
+
+Open `pace_job.sbatch` and adjust the cluster-specific lines:
+
+```bash
+# Required: set your partition
+#SBATCH --partition=gpu-h100        # or gpu-a100-p3 for Phoenix cluster
+
+# Optional but recommended:
+#SBATCH --account=YOUR_ACCOUNT      # uncomment and fill in your PACE allocation
+#SBATCH --mail-user=YOU@gatech.edu  # uncomment to receive job notifications
+```
+
+If submitting to the ICE cluster (H100 nodes), also uncomment `#SBATCH --cluster=ice`.
+
+**Step 2: Set your HF token**
+
+```bash
+echo 'export HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxx' >> ~/.bashrc
+source ~/.bashrc
+```
+
+Or pass it inline at submission time (see Step 3).
+
+**Step 3: Create the log directory and submit**
+
+```bash
+mkdir -p logs
+sbatch pace_job.sbatch
+# (alternatively, with inline token:)
+# sbatch --export=ALL,HF_TOKEN=hf_xxx pace_job.sbatch
+```
+
+**Step 4: Monitor the job**
+
+```bash
+squeue -u $USER                          # check queue position / running status
+tail -f logs/slurm_<JOBID>.out           # follow live stdout
+```
+
+**Step 5: Retrieve results**
+
+Once the job finishes, all outputs are in the repo root:
+
+```
+results/
+  no_straggler/          *.json files, logs/, metadata.json
+  mixed/
+  straggler/
+  stress_straggler/
+  migration_straggler/
+plots/
+  01_ttft_p99.png
+  02_tpot_p99.png
+  03_itl_p99.png
+  04_e2e_p99.png
+  05_itl_cdf.png
+  06_migration_events.png
+  07_prometheus_p99_itl_timeseries.png   (Prometheus time-series, if available)
+  08_prometheus_kv_cache.png             (KV cache utilisation, if available)
+logs/
+  slurm_<JOBID>.out
+  experiments_<JOBID>.log
+  analysis_<JOBID>.log
+proxy.log                               (migration events per run)
+```
+
+---
+
+### 3. Path B — Interactive / Manual Steps
+
+Use this path for development, debugging, or if you are not on PACE.
+
+**Step 1: Set environment variables**
+
+```bash
+export SCRATCH_ROOT=/path/to/your/scratch   # e.g. /storage/scratch1/$USER on PACE
+export CONDA_ENV=$SCRATCH_ROOT/envs/sysml_research4
+export HF_HOME=$SCRATCH_ROOT/huggingface_cache
+export HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxx
+export MODEL=meta-llama/Llama-2-13b-hf
+```
+
+**Step 2: Start the 4-GPU serving stack**
+
+```bash
+./startup.sh
+```
+
+`startup.sh` launches (in order): migration proxy → fast-prefill (GPU 0) → fast-decode (GPU 1) → slow-prefill (GPU 2) → slow-decode (GPU 3). It health-checks all five servers and exits only after they are all listening. If any server fails, all processes are terminated automatically.
+
+Typical startup time is **10–20 minutes** (dominated by `vllm serve` model load on first run, ~3–5 minutes on subsequent runs with cached weights).
+
+Log files written to the repo root: `proxy.log`, `fast_prefill.log`, `fast_decode.log`, `slow_prefill.log`, `slow_decode.log`.
+
+Once `startup.sh` exits 0, Prometheus and Grafana containers are also started automatically (if `podman` is available).
+
+**Step 3: Verify with a smoke test**
+
+```bash
+curl -X POST http://localhost:10099/v1/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model": "meta-llama/Llama-2-13b-hf", "prompt": "The capital of France is", "max_tokens": 20, "temperature": 0.0}'
+```
+
+A valid JSON response with `"choices":[{"text":" Paris..."}]` confirms the proxy, prefill, and decode servers are all communicating.
+
+**Step 4: (Optional) Open the monitoring dashboard**
+
+Grafana is available at **http://localhost:3000** (credentials: `admin` / `admin`).
+
+To import the pre-built dashboard:
+1. Log in to Grafana
+2. Go to **Dashboards → Import**
+3. Upload `prometheus_grafana/grafana_pd_revised_modified_cleaned_labels.json`
+4. Select the Prometheus data source and click **Import**
+
+Prometheus is available at **http://localhost:9090** for ad-hoc PromQL queries.
+
+**Step 5: Run all experiment conditions**
+
+```bash
+bash scripts/run_experiments.sh
+```
+
+This runs five conditions in sequence (see [Evaluation Workloads](#evaluation-workloads) for the full matrix). The script:
+- Runs Phase 1 (migration disabled, `MIGRATION_T_MIN=999999`): `no_straggler`, `mixed`, `straggler`, `stress_straggler`
+- Restarts the proxy with migration enabled (`MIGRATION_T_MIN=200`)
+- Runs Phase 2: `migration_straggler`
+- Posts Grafana annotations at condition boundaries (if Grafana is reachable)
+
+Each condition takes approximately **5–10 minutes**. Total wall time including cooldowns: **~60–90 minutes**.
+
+To resume a run that was interrupted mid-way (skips conditions that already have a `metadata.json`):
+
+```bash
+SKIP_EXISTING=1 bash scripts/run_experiments.sh
+```
+
+**Step 6: Analyze results and generate plots**
+
+```bash
+# With Prometheus time-series (if Grafana/Prometheus are still running):
+python scripts/analyze_results.py --results-dir results --plots-dir plots
+
+# Without Prometheus (e.g. after cleanup, or on a headless analysis node):
+python scripts/analyze_results.py --results-dir results --plots-dir plots --no-prometheus
+```
+
+Eight plots are written to `plots/`:
+
+| Plot | File | Content |
+|---|---|---|
+| 1 | `01_ttft_p99.png` | P99 TTFT across all conditions |
+| 2 | `02_tpot_p99.png` | P99 TPOT across all conditions |
+| 3 | `03_itl_p99.png` | P99 ITL — key straggler impact metric |
+| 4 | `04_e2e_p99.png` | P99 end-to-end latency |
+| 5 | `05_itl_cdf.png` | ITL CDF comparing straggler vs. migration |
+| 6 | `06_migration_events.png` | Timeline of migration events from `proxy.log` |
+| 7 | `07_prometheus_p99_itl_timeseries.png` | P99 ITL time-series (Prometheus) |
+| 8 | `08_prometheus_kv_cache.png` | KV cache utilisation over time (Prometheus) |
+
+**Step 7: Tear down**
+
+```bash
+./cleanup.sh
+```
+
+Kills the proxy, all four vLLM servers, stops Prometheus and Grafana containers, and releases all GPU and port resources.
+
+---
+
+### 4. Running Individual Workloads (Without `run_experiments.sh`)
+
+If you want to run a single workload script manually (e.g. for debugging):
+
+```bash
+# Example: straggler injection without migration
+export VLLM_PORT=10099
+export VLLM_MODEL=meta-llama/Llama-2-13b-hf
+bash scripts/straggler_vllm_load.sh
+```
+
+Results are written to the current directory as `vllm_bench_*.json` files. Pass `--save-result` and `--result-dir` to `vllm bench serve` inside the script to redirect output.
+
+---
+
 ## Environment Variables
 
 ### `startup.sh` / `startup_baseline.sh`
