@@ -156,6 +156,7 @@ python scripts/analyze_results.py \
     --results-dir results \
     --plots-dir    plots \
     --proxy-log    proxy.log \
+    --no-prometheus \
     2>&1 | tee "logs/analysis_${SLURM_JOB_ID}.log"
 
 echo ""

@@ -82,9 +82,47 @@ COOLDOWN="${COOLDOWN:-90}"        # seconds between conditions
 RESTART_WAIT="${RESTART_WAIT:-30}" # seconds to wait after proxy restart for re-registration
 SKIP_EXISTING="${SKIP_EXISTING:-0}"
 
+# Grafana annotations (marks condition start/end as region annotations in dashboards)
+# Overridable via env vars if your Grafana setup differs from defaults.
+GRAFANA_URL="${GRAFANA_URL:-http://localhost:3000}"
+GRAFANA_USER="${GRAFANA_USER:-admin}"
+GRAFANA_PASS="${GRAFANA_PASS:-admin}"
+
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 log() { echo "[$(date +%H:%M:%S)] $*"; }
+
+# Post a Grafana region annotation via the HTTP API.
+# Gracefully does nothing if Grafana is unreachable.
+# Args: text  tags_json  start_ms  [end_ms]
+#   tags_json: JSON array literal without outer [], e.g. '"experiment","straggler"'
+grafana_annotate() {
+    local text="$1"
+    local tags_json="$2"
+    local time_ms="${3:-$(( $(date +%s) * 1000 ))}"
+    local time_end_ms="${4:-}"
+
+    local json
+    if [[ -n "$time_end_ms" ]]; then
+        json="{\"text\":\"${text}\",\"tags\":[${tags_json}],\"time\":${time_ms},\"timeEnd\":${time_end_ms}}"
+    else
+        json="{\"text\":\"${text}\",\"tags\":[${tags_json}],\"time\":${time_ms}}"
+    fi
+
+    local http_code
+    http_code=$(curl -s -o /dev/null -w "%{http_code}" \
+        --max-time 5 \
+        -X POST "${GRAFANA_URL}/api/annotations" \
+        -u "${GRAFANA_USER}:${GRAFANA_PASS}" \
+        -H "Content-Type: application/json" \
+        -d "$json" 2>/dev/null) || http_code="ERR"
+
+    if [[ "$http_code" == "200" ]]; then
+        log "  [grafana] ✓ Annotation posted: ${text}"
+    else
+        log "  [grafana] Annotation skipped (HTTP ${http_code} — Grafana may not be running)"
+    fi
+}
 
 # Send a test inference.  Returns the HTTP status code.
 _probe_proxy() {
@@ -212,11 +250,20 @@ run_experiment() {
     local proxy_start_line=0
     proxy_start_line=$(wc -l < "$PROXY_LOG" 2>/dev/null || echo 0)
 
+    # Capture wall-clock start time (Unix epoch in both seconds and ms for Prometheus/Grafana)
+    local start_epoch start_epoch_ms
+    start_epoch=$(date +%s)
+    start_epoch_ms=$(( start_epoch * 1000 ))
+
+    # Post Grafana start-of-region annotation
+    grafana_annotate "START: ${name}" "\"experiment\",\"start\",\"${name}\"" "${start_epoch_ms}"
+
     # Write pre-run metadata
     cat > "$result_dir/metadata.json" <<EOF
 {
   "experiment": "$name",
   "start_time": "$(date -Iseconds)",
+  "start_epoch": $start_epoch,
   "proxy_host": "$VLLM_HOST",
   "proxy_port": "$PROXY_HTTP_PORT",
   "model": "$MODEL",
@@ -232,6 +279,14 @@ EOF
     bash "$script" 2>&1 | tee run.log || exit_code=${PIPESTATUS[0]}
     popd >/dev/null
 
+    # Capture wall-clock end time
+    local end_epoch end_epoch_ms
+    end_epoch=$(date +%s)
+    end_epoch_ms=$(( end_epoch * 1000 ))
+
+    # Close the Grafana region annotation
+    grafana_annotate "END: ${name}" "\"experiment\",\"end\",\"${name}\"" "${start_epoch_ms}" "${end_epoch_ms}"
+
     # Record post-run metadata
     local proxy_end_line=0
     proxy_end_line=$(wc -l < "$PROXY_LOG" 2>/dev/null || echo 0)
@@ -241,6 +296,8 @@ EOF
   "experiment": "$name",
   "start_time": "$(date -Iseconds)",
   "end_time": "$(date -Iseconds)",
+  "start_epoch": $start_epoch,
+  "end_epoch": $end_epoch,
   "exit_code": $exit_code,
   "proxy_host": "$VLLM_HOST",
   "proxy_port": "$PROXY_HTTP_PORT",

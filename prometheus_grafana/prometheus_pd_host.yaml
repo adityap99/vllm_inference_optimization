@@ -35,9 +35,13 @@ scrape_configs:
           role: 'decode'
           lane: 'slow'
 
-  - job_name: 'vllm-proxy'
-    static_configs:
-      - targets: ['localhost:10099']
-        labels:
-          instance: 'proxy'
-          role: 'proxy'
+  # Proxy metrics endpoint — uncomment once disagg_proxy_migration.py exposes
+  # /metrics via prometheus_client (planned: migration_rate counter,
+  # migration_pause_seconds histogram on a dedicated port :19099).
+  #
+  # - job_name: 'vllm-proxy'
+  #   static_configs:
+  #     - targets: ['localhost:19099']
+  #       labels:
+  #         instance: 'proxy'
+  #         role: 'proxy'

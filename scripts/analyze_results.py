@@ -8,6 +8,8 @@ Usage
     python scripts/analyze_results.py
     python scripts/analyze_results.py --results-dir results --plots-dir plots
     python scripts/analyze_results.py --proxy-log proxy.log
+    python scripts/analyze_results.py --prometheus-url http://localhost:9090
+    python scripts/analyze_results.py --no-prometheus   # skip time-series plots
 
 Reads
 ─────
@@ -23,6 +25,8 @@ Writes
     plots/04_e2e_comparison.png          E2E P99 short vs long requests
     plots/05_straggler_cost.png          Long-request E2E: migration cost
     plots/06_migration_pause_hist.png    Histogram of migration pause durations
+    plots/07_itl_timeseries_prometheus.png  P99 ITL time-series from Prometheus
+    plots/08_kv_cache_timeseries.png     KV-cache utilisation time-series
     plots/summary_table.csv             All metrics in one CSV
     plots/summary_table.md              Markdown table copy (for README paste)
 """
@@ -33,6 +37,8 @@ import json
 import os
 import re
 import sys
+import urllib.parse
+import urllib.request
 from collections import defaultdict
 from pathlib import Path
 
@@ -660,6 +666,195 @@ def plot_migration_pause_histogram(stats: dict, plots_dir: str) -> None:
     print(f"  [saved] {out}")
 
 
+# ─── Prometheus time-series queries ─────────────────────────────────────────
+
+def query_prometheus_range(
+    prom_url: str,
+    promql: str,
+    start_epoch: int,
+    end_epoch: int,
+    step: int = 15,
+) -> list[tuple[float, float]]:
+    """
+    Query Prometheus range API and return a list of (timestamp, value) pairs.
+    Returns an empty list on any error (Prometheus unreachable, query fails, etc.).
+    """
+    params = urllib.parse.urlencode({
+        "query": promql,
+        "start": str(start_epoch),
+        "end":   str(end_epoch),
+        "step":  str(step),
+    })
+    url = f"{prom_url.rstrip('/')}/api/v1/query_range?{params}"
+    try:
+        with urllib.request.urlopen(url, timeout=10) as resp:
+            body = json.loads(resp.read())
+    except Exception:
+        return []
+
+    if body.get("status") != "success":
+        return []
+
+    results = body.get("data", {}).get("result", [])
+    if not results:
+        return []
+
+    # Merge all series values (sum for histogram_quantile already done in PromQL)
+    points: dict[float, float] = {}
+    for series in results:
+        for ts_str, val_str in series.get("values", []):
+            try:
+                points[float(ts_str)] = float(val_str)
+            except (ValueError, TypeError):
+                pass
+    return sorted(points.items())
+
+
+def _load_metadata_epoch(results_dir: str, cond: str) -> tuple[int, int] | tuple[None, None]:
+    """Return (start_epoch, end_epoch) integers from metadata.json, or (None, None)."""
+    meta_path = os.path.join(results_dir, cond, "metadata.json")
+    if not os.path.exists(meta_path):
+        return None, None
+    try:
+        with open(meta_path) as f:
+            m = json.load(f)
+        return int(m["start_epoch"]), int(m["end_epoch"])
+    except (KeyError, ValueError, OSError, json.JSONDecodeError):
+        return None, None
+
+
+ITL_PROMQL = (
+    'histogram_quantile(0.99, sum(rate('
+    'vllm:inter_token_latency_seconds_bucket{{instance=~".*:{port}"}}[30s]'
+    ')) by (le)) * 1000'
+)
+KV_PROMQL = 'vllm:kv_cache_usage_perc{{instance=~".*:{port}"}}'
+
+# Fast-Lane decode server port (primary metrics target for ITL)
+FAST_DECODE_PORT = "20099"
+
+
+def plot_itl_timeseries(
+    results_dir: str,
+    plots_dir: str,
+    prom_url: str,
+) -> None:
+    """
+    Plot 07 — P99 ITL time-series from Prometheus for three key conditions:
+    no_straggler, straggler, migration_straggler.
+    Contrasting these three over time shows the live straggler effect and the
+    mitigation effect of migration, which bar charts miss.
+    """
+    conditions_to_plot = [
+        ("no_straggler",        "Baseline (no straggler)"),
+        ("straggler",           "Straggler — no migration"),
+        ("migration_straggler", "Straggler + migration"),
+    ]
+
+    promql = ITL_PROMQL.format(port=FAST_DECODE_PORT)
+
+    fig, ax = plt.subplots(figsize=(13, 5))
+    any_plotted = False
+
+    for cond, label in conditions_to_plot:
+        start_epoch, end_epoch = _load_metadata_epoch(results_dir, cond)
+        if start_epoch is None:
+            print(f"  [skip] plot 07: no metadata.json for {cond}")
+            continue
+
+        points = query_prometheus_range(prom_url, promql, start_epoch, end_epoch)
+        if not points:
+            print(f"  [skip] plot 07: no Prometheus data for {cond} ({prom_url})")
+            continue
+
+        ts = [p[0] - start_epoch for p in points]   # seconds from condition start
+        vals = [p[1] for p in points]                # P99 ITL in ms
+        ax.plot(ts, vals, label=label, color=COLORS[cond], linewidth=1.8)
+        any_plotted = True
+
+    if not any_plotted:
+        plt.close()
+        print("  [skip] plot 07: no Prometheus data available")
+        return
+
+    ax.set_xlabel("Time from condition start  (s)", fontsize=11)
+    ax.set_ylabel("P99 ITL — fast-decode  (ms)", fontsize=11)
+    ax.set_title(
+        "P99 Inter-Token Latency Time-Series  (fast-decode server)\n"
+        "Straggler effect visible as latency spike; migration restores baseline",
+        fontsize=12,
+    )
+    ax.legend(fontsize=9)
+    ax.grid(alpha=0.3)
+    ax.set_ylim(bottom=0)
+
+    plt.tight_layout()
+    out = os.path.join(plots_dir, "07_itl_timeseries_prometheus.png")
+    plt.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"  [saved] {out}")
+
+
+def plot_kv_cache_timeseries(
+    results_dir: str,
+    plots_dir: str,
+    prom_url: str,
+) -> None:
+    """
+    Plot 08 — KV-cache utilisation (%) on the fast-decode server over time.
+    Under straggler conditions the fast-decode KV cache fills up because long
+    straggler requests hold cache slots.  Migration should reduce this pressure.
+    """
+    conditions_to_plot = [
+        ("no_straggler",        "Baseline (no straggler)"),
+        ("straggler",           "Straggler — no migration"),
+        ("migration_straggler", "Straggler + migration"),
+    ]
+
+    promql = KV_PROMQL.format(port=FAST_DECODE_PORT)
+
+    fig, ax = plt.subplots(figsize=(13, 5))
+    any_plotted = False
+
+    for cond, label in conditions_to_plot:
+        start_epoch, end_epoch = _load_metadata_epoch(results_dir, cond)
+        if start_epoch is None:
+            continue
+
+        points = query_prometheus_range(prom_url, promql, start_epoch, end_epoch, step=5)
+        if not points:
+            continue
+
+        ts   = [p[0] - start_epoch for p in points]
+        vals = [p[1] * 100 for p in points]   # fraction → percentage
+        ax.plot(ts, vals, label=label, color=COLORS[cond], linewidth=1.8)
+        any_plotted = True
+
+    if not any_plotted:
+        plt.close()
+        print("  [skip] plot 08: no Prometheus KV-cache data available")
+        return
+
+    ax.set_xlabel("Time from condition start  (s)", fontsize=11)
+    ax.set_ylabel("KV-cache utilisation  (%)", fontsize=11)
+    ax.set_title(
+        "KV-Cache Utilisation — Fast-Decode Server\n"
+        "Migration should reduce cache pressure by evicting stale straggler slots",
+        fontsize=12,
+    )
+    ax.set_ylim(0, 105)
+    ax.axhline(90, color="red", linestyle="--", linewidth=1.2,
+               label="90% pressure line")
+    ax.legend(fontsize=9)
+    ax.grid(alpha=0.3)
+
+    plt.tight_layout()
+    out = os.path.join(plots_dir, "08_kv_cache_timeseries.png")
+    plt.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"  [saved] {out}")
+
+
 # ─── Summary table ────────────────────────────────────────────────────────────
 
 def _pct_recovery(baseline: float | None, straggler: float | None,
@@ -767,6 +962,10 @@ def main() -> None:
                         help="Output directory for plots and tables (default: plots)")
     parser.add_argument("--proxy-log",   default="proxy.log",
                         help="Path to proxy.log for migration event parsing (default: proxy.log)")
+    parser.add_argument("--prometheus-url", default="http://localhost:9090",
+                        help="Prometheus base URL (default: http://localhost:9090)")
+    parser.add_argument("--no-prometheus", action="store_true",
+                        help="Skip Prometheus time-series plots")
     args = parser.parse_args()
 
     results_dir = os.path.abspath(args.results_dir)
@@ -780,9 +979,10 @@ def main() -> None:
 
     os.makedirs(plots_dir, exist_ok=True)
 
-    print(f"Results dir : {results_dir}")
-    print(f"Plots dir   : {plots_dir}")
-    print(f"Proxy log   : {proxy_log}")
+    print(f"Results dir    : {results_dir}")
+    print(f"Plots dir      : {plots_dir}")
+    print(f"Proxy log      : {proxy_log}")
+    print(f"Prometheus URL : {args.prometheus_url}" + (" (disabled)" if args.no_prometheus else ""))
     print()
 
     # ── Load data ──────────────────────────────────────────────────────────
@@ -822,6 +1022,10 @@ def main() -> None:
         plot_straggler_cost(rows,        plots_dir)
         if migration_stats:
             plot_migration_pause_histogram(migration_stats, plots_dir)
+
+        if not args.no_prometheus:
+            plot_itl_timeseries(results_dir,   plots_dir, args.prometheus_url)
+            plot_kv_cache_timeseries(results_dir, plots_dir, args.prometheus_url)
 
     # ── CSV / Markdown ─────────────────────────────────────────────────────
     if _HAS_PANDAS:
