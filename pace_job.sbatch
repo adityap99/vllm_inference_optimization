@@ -114,44 +114,64 @@ echo "All servers ready. Waiting 30s for full model warm-up before load testing.
 sleep 30
 
 # =============================================================================
-# Step 2 — Run evaluation workloads
+# Step 2 — Run all evaluation conditions
+# =============================================================================
+# run_experiments.sh orchestrates all 5 conditions (PROPOSAL.md §6):
+#
+#   Phase 1 – migration DISABLED (T_MIN=999999):
+#     no_straggler, mixed, straggler, stress_straggler
+#
+#   Phase 2 – migration ENABLED (T_MIN=200):
+#     migration_straggler
+#
+# Results land in results/<condition>/ as vllm bench JSON files.
+# The proxy is restarted between phases; vLLM servers keep running throughout.
 # =============================================================================
 
-# Proxy URL (localhost because all servers are on the same node)
-export OPENAI_API_BASE="http://localhost:10099/v1"
+export VLLM_HOST="localhost"
+export VLLM_PORT="10099"
+export VLLM_MODEL="$MODEL"
 
 echo "------------------------------------------------------------"
-echo "STEP 2: Running evaluation workloads"
+echo "STEP 2: Running evaluation conditions via run_experiments.sh"
 echo "------------------------------------------------------------"
 echo ""
 
-run_workload() {
-    local name="$1"
-    local script="$2"
-    echo "  >> Starting: $name  ($(date +%H:%M:%S))"
-    bash "$script" 2>&1 | tee "logs/${name}_${SLURM_JOB_ID}.log"
-    echo "  << Done:     $name  ($(date +%H:%M:%S))"
-    echo ""
-    # Cool-down between workloads to let KV cache drain
-    sleep 30
-}
-
-# Commenting out workloads you don't need for a given run is fine.
-run_workload "no_straggler"       scripts/no_straggler_vllm_load.sh
-run_workload "mixed"              scripts/mixed_vllm_load.sh
-run_workload "straggler"          scripts/straggler_vllm_load.sh
-run_workload "stress_straggler"   scripts/stress_straggler_vllm_load.sh
-run_workload "migration_straggler" scripts/migration_straggler_vllm_load.sh
+bash scripts/run_experiments.sh 2>&1 | tee "logs/experiments_${SLURM_JOB_ID}.log"
+EXPERIMENTS_EXIT=${PIPESTATUS[0]}
+if [[ $EXPERIMENTS_EXIT -ne 0 ]]; then
+    echo "WARNING: run_experiments.sh returned exit code ${EXPERIMENTS_EXIT}"
+    echo "  Some conditions may have partial results — continuing to analysis."
+fi
 
 # =============================================================================
-# Step 3 — Cleanup
+# Step 3 — Analyze results and generate plots
 # =============================================================================
 echo "------------------------------------------------------------"
-echo "STEP 3: Cleaning up server processes..."
+echo "STEP 3: Analyzing results and generating plots"
+echo "------------------------------------------------------------"
+echo ""
+
+python scripts/analyze_results.py \
+    --results-dir results \
+    --plots-dir    plots \
+    --proxy-log    proxy.log \
+    2>&1 | tee "logs/analysis_${SLURM_JOB_ID}.log"
+
+echo ""
+echo "Plots and tables saved to: plots/"
+
+# =============================================================================
+# Step 4 — Cleanup
+# =============================================================================
+echo "------------------------------------------------------------"
+echo "STEP 4: Cleaning up server processes..."
 echo "------------------------------------------------------------"
 bash cleanup.sh
 
 echo ""
 echo "========================================================"
 echo "Job complete: $(date)"
+echo "Results : $PWD/results/"
+echo "Plots   : $PWD/plots/"
 echo "========================================================"
