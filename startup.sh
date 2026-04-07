@@ -67,7 +67,7 @@ echo "    Decode  GPU: $FAST_DECODE_GPU, Port: $FAST_DECODE_PORT, KV Port: $FAST
 echo "  Slow Lane (BF16):"
 echo "    Prefill GPU: $SLOW_PREFILL_GPU, Port: $SLOW_PREFILL_PORT, KV Port: $SLOW_PREFILL_KV_PORT"
 echo "    Decode  GPU: $SLOW_DECODE_GPU, Port: $SLOW_DECODE_PORT, KV Port: $SLOW_DECODE_KV_PORT"
-  echo "  Proxy Port: $PROXY_PORT (ZMQ fast), $SLOW_PROXY_PORT (ZMQ slow), $PROXY_HTTP_PORT (HTTP)"
+echo "  Proxy Port: $PROXY_PORT (ZMQ fast), $SLOW_PROXY_PORT (ZMQ slow), $PROXY_HTTP_PORT (HTTP)"
 echo "  Timeout: ${TIMEOUT_SECONDS}s"
 echo ""
 

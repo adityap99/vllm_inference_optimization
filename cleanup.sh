@@ -42,7 +42,7 @@ if [ $REMAINING -gt 0 ]; then
 fi
 
 # Clean up ports used by the system
-PORTS=(10099 20096 20097 20098 20099 21096 21098 22097 22099 30099)
+PORTS=(10099 20096 20097 20098 20099 21096 21098 22097 22099 30097 30099)
 echo ""
 echo "Cleaning up network ports..."
 for PORT in "${PORTS[@]}"; do
