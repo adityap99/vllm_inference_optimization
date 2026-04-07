@@ -1,32 +1,11 @@
-(base) adityapandit@ipsec-10-2-0-219 ~ % ssh -J apandit63@login-ice.pace.gatech.edu \                                                                                   
+# Port-forward Prometheus (9090) from the HPC compute node to localhost.
+# Replace HPC_USER and the hostnames with your cluster's login/compute node.
+#
+# Example command:
+(base) user@local ~ % ssh -J $HPC_USER@login.hpc.example.edu \
     -L 9090:localhost:9090 \
-    apandit63@atl1-1-03-010-20-0.pace.gatech.edu
+    $HPC_USER@compute-node.hpc.example.edu
 
-apandit63@login-ice.pace.gatech.edu's password: 
-The authenticity of host 'atl1-1-03-010-20-0.pace.gatech.edu (<no hostip for proxy command>)' can't be established.
-ED25519 key fingerprint is SHA256:JEsTunWYIWHDId7wQSR17xdMREwCmojk/dIxyU5ac3A.
-This key is not known by any other names
-Are you sure you want to continue connecting (yes/no/[fingerprint])? yes
-Warning: Permanently added 'atl1-1-03-010-20-0.pace.gatech.edu' (ED25519) to the list of known hosts.
-apandit63@atl1-1-03-010-20-0.pace.gatech.edu's password: 
-Last login: Sun Nov 16 02:39:36 2025
-Terms of Use
-
-This computer system is the property of Georgia Institute of
-Technology.  Any user of this system must comply with all Institute
-and Board of Regents policies, including the Acceptable Use
-Policy (AUP), Data Privacy Policy (DPP) and Cyber Security
-Policy (CSP), see http://b.gatech.edu/it-policies.  Users should
-have no expectation of privacy, as any and all files on this system
-may be intercepted, monitored, copied, inspected, and/or disclosed to
-authorized personnel in order to meet institute obligations.
-
-By using this system, I acknowledge and consent to these terms.
-
-#######################################
-# Welcome to GT Instructional Cluster #
-#######################################
-
-If you require assistance with this system, please contact your
-course instructor or teaching assistant (TA).
-(base) [apandit63@atl1-1-03-010-20-0 ~]$ exit
+# You will be prompted for your HPC password (once per hop).
+# After connecting, Prometheus will be available at http://localhost:9090
+(base) [$HPC_USER@compute-node ~]$ exit

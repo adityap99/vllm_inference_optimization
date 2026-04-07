@@ -3,19 +3,37 @@ global:
   evaluation_interval: 30s
 
 scrape_configs:
-  - job_name: 'vllm-prefill'
+  - job_name: 'vllm-fast-prefill'
     static_configs:
       - targets: ['localhost:20098']
         labels:
-          instance: 'prefill'
+          instance: 'fast-prefill'
           role: 'prefill'
+          lane: 'fast'
 
-  - job_name: 'vllm-decode'
+  - job_name: 'vllm-fast-decode'
     static_configs:
       - targets: ['localhost:20099']
         labels:
-          instance: 'decode'
+          instance: 'fast-decode'
           role: 'decode'
+          lane: 'fast'
+
+  - job_name: 'vllm-slow-prefill'
+    static_configs:
+      - targets: ['localhost:20096']
+        labels:
+          instance: 'slow-prefill'
+          role: 'prefill'
+          lane: 'slow'
+
+  - job_name: 'vllm-slow-decode'
+    static_configs:
+      - targets: ['localhost:20097']
+        labels:
+          instance: 'slow-decode'
+          role: 'decode'
+          lane: 'slow'
 
   - job_name: 'vllm-proxy'
     static_configs:

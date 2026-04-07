@@ -23,7 +23,7 @@ fi
 
 # Kill proxy server
 echo "Stopping proxy server..."
-pkill -9 -f "disagg_proxy_p2p_nccl_xpyd.py" 2>/dev/null
+pkill -9 -f "disagg_proxy" 2>/dev/null
 if [ $? -eq 0 ]; then
     echo "  ✓ Proxy server terminated"
 else
@@ -42,7 +42,7 @@ if [ $REMAINING -gt 0 ]; then
 fi
 
 # Clean up ports used by the system
-PORTS=(10099 20098 20099 21098 22099 30099)
+PORTS=(10099 20096 20097 20098 20099 21096 21098 22097 22099 30099)
 echo ""
 echo "Cleaning up network ports..."
 for PORT in "${PORTS[@]}"; do
@@ -61,7 +61,7 @@ sleep 2
 echo ""
 echo "Verifying cleanup..."
 ACTIVE_PROCESSES=$(ps aux | grep -E "(vllm|disagg_proxy)" | grep -v grep | wc -l)
-ACTIVE_PORTS=$(netstat -tuln 2>/dev/null | grep -E ":(10099|20098|20099|21098|22099|30099)" | wc -l)
+ACTIVE_PORTS=$(netstat -tuln 2>/dev/null | grep -E ":(10099|20096|20097|20098|20099|21096|21098|22097|22099|30099)" | wc -l)
 
 if [ $ACTIVE_PROCESSES -eq 0 ]; then
     echo "  ✓ All processes stopped"
@@ -74,7 +74,7 @@ if [ $ACTIVE_PORTS -eq 0 ]; then
     echo "  ✓ All ports freed"
 else
     echo "  ⚠ Warning: $ACTIVE_PORTS ports still in use"
-    netstat -tuln 2>/dev/null | grep -E ":(10099|20098|20099|21098|22099|30099)"
+    netstat -tuln 2>/dev/null | grep -E ":(10099|20096|20097|20098|20099|21096|21098|22097|22099|30099)"
 fi
 
 # Clean up log files (optional, commented out by default)
