@@ -1,0 +1,10 @@
+Upgrade to 4-GPU fast+slow-lane disaggregated serving (PROPOSAL.md)
+
+- startup.sh: rewritten for 2-PD-pair setup (fast lane FP16 GPUs 0+1, slow lane BF16 GPUs 2+3); proxy updated to disagg_proxy_migration.py
+- startup_baseline.sh: new script for 1P1D baseline experiments using the original non-migration proxy (disagg_proxy_p2p_nccl_xpyd.py)
+- cleanup.sh: expanded port list to cover slow-lane ports 20096/20097
+- prometheus_pd_host.yaml: added slow-prefill and slow-decode scrape targets with lane label for Grafana differentiation
+- scripts/migration_straggler_vllm_load.sh: new evaluation workload targeting migration proxy, identical params to straggler_vllm_load.sh
+- disagg_proxy_p2p_nccl_xpyd.py: retained as baseline (no-migration) proxy
+- Removed hardcoded HPC paths; replaced with SCRATCH_ROOT env var
+- Anonymized prometheus port-forwarding notes

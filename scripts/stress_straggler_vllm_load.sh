@@ -13,10 +13,10 @@ SMALL_IN=128
 SMALL_OUT=64
 SMALL_NUM_PROMPTS=2000
 
-LONG_RPS=0.05
+LONG_RPS=1.5
 LONG_IN=128
-LONG_OUT=2048   # longer outputs -> more KV growth
-LONG_NUM_PROMPTS=250
+LONG_OUT=3072   # longer outputs -> more KV growth
+LONG_NUM_PROMPTS=500
 
 "${ROOT_DIR}/mixed_vllm_load.sh" \
   --host "${VLLM_HOST:-localhost}" \

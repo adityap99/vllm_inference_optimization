@@ -56,6 +56,17 @@ echo ""
 
 PIDS=()
 
+# Kill all background servers and exit with failure
+cleanup_and_exit() {
+    local msg="$1"
+    echo "  ✗ $msg"
+    echo "  Killing all background processes..."
+    for pid in "${PIDS[@]}"; do
+        kill "$pid" 2>/dev/null || true
+    done
+    exit 1
+}
+
 # =============================================================================
 # Launch Baseline (Non-Migration) Proxy Server
 # =============================================================================
@@ -150,27 +161,24 @@ echo "Waiting for prefill server (port $PREFILL_PORT)..."
 if check_server_ready $PREFILL_PORT "prefill" 120; then
     echo "  ✓ Prefill server ready"
 else
-    echo "  ✗ Prefill server failed to start. Check prefill.log"
     tail -20 prefill.log
-    exit 1
+    cleanup_and_exit "Prefill server failed to start. Check prefill.log"
 fi
 
 echo "Waiting for decode server (port $DECODE_PORT)..."
 if check_server_ready $DECODE_PORT "decode" 120; then
     echo "  ✓ Decode server ready"
 else
-    echo "  ✗ Decode server failed to start. Check decode.log"
     tail -20 decode.log
-    exit 1
+    cleanup_and_exit "Decode server failed to start. Check decode.log"
 fi
 
 echo "Waiting for proxy server (port $PROXY_HTTP_PORT)..."
 if check_server_ready $PROXY_HTTP_PORT "proxy" 30; then
     echo "  ✓ Proxy server ready"
 else
-    echo "  ✗ Proxy server failed to start. Check proxy.log"
     tail -20 proxy.log
-    exit 1
+    cleanup_and_exit "Proxy server failed to start. Check proxy.log"
 fi
 
 echo ""

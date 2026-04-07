@@ -30,6 +30,7 @@ VLLM_BIN="$CONDA_ENV/bin/vllm"
 MODEL=${MODEL:-meta-llama/Llama-2-13b-hf}
 TIMEOUT_SECONDS=${TIMEOUT_SECONDS:-1200}
 PROXY_PORT=${PROXY_PORT:-30099}
+SLOW_PROXY_PORT=${SLOW_PROXY_PORT:-30097}
 PROXY_HTTP_PORT=${PROXY_HTTP_PORT:-10099}
 
 # Hugging Face cache relocation (use scratch space instead of ~/.cache)
@@ -66,18 +67,29 @@ echo "    Decode  GPU: $FAST_DECODE_GPU, Port: $FAST_DECODE_PORT, KV Port: $FAST
 echo "  Slow Lane (BF16):"
 echo "    Prefill GPU: $SLOW_PREFILL_GPU, Port: $SLOW_PREFILL_PORT, KV Port: $SLOW_PREFILL_KV_PORT"
 echo "    Decode  GPU: $SLOW_DECODE_GPU, Port: $SLOW_DECODE_PORT, KV Port: $SLOW_DECODE_KV_PORT"
-echo "  Proxy Port: $PROXY_PORT (ZMQ), $PROXY_HTTP_PORT (HTTP)"
+  echo "  Proxy Port: $PROXY_PORT (ZMQ fast), $SLOW_PROXY_PORT (ZMQ slow), $PROXY_HTTP_PORT (HTTP)"
 echo "  Timeout: ${TIMEOUT_SECONDS}s"
 echo ""
 
 # Array to store PIDs
 PIDS=()
 
+# Kill all background servers and exit with failure
+cleanup_and_exit() {
+    local msg="$1"
+    echo "  ✗ $msg"
+    echo "  Killing all background processes..."
+    for pid in "${PIDS[@]}"; do
+        kill "$pid" 2>/dev/null || true
+    done
+    exit 1
+}
+
 # =============================================================================
 # Launch Migration-Aware Proxy Server
 # =============================================================================
 echo "Starting migration-aware proxy server..."
-PROXY_PORT=$PROXY_PORT PROXY_HTTP_PORT=$PROXY_HTTP_PORT $PYTHON_BIN disagg_proxy_migration.py > proxy.log 2>&1 &
+PROXY_PORT=$PROXY_PORT SLOW_PROXY_PORT=$SLOW_PROXY_PORT PROXY_HTTP_PORT=$PROXY_HTTP_PORT MODEL=$MODEL $PYTHON_BIN disagg_proxy_migration.py > proxy.log 2>&1 &
 PROXY_PID=$!
 PIDS+=($PROXY_PID)
 echo "  ✓ Proxy server started (PID: $PROXY_PID)"
@@ -151,7 +163,7 @@ CUDA_VISIBLE_DEVICES=$SLOW_PREFILL_GPU $VLLM_BIN serve $MODEL \
     --disable-sliding-window \
     --no-enable-chunked-prefill \
     --kv-cache-dtype auto \
-    --kv-transfer-config "{\"kv_connector\":\"P2pNcclConnector\",\"kv_role\":\"kv_producer\",\"kv_buffer_size\":\"1e9\",\"kv_port\":\"$SLOW_PREFILL_KV_PORT\",\"kv_connector_extra_config\":{\"proxy_ip\":\"0.0.0.0\",\"proxy_port\":\"$PROXY_PORT\",\"http_port\":\"$SLOW_PREFILL_PORT\",\"send_type\":\"PUT_ASYNC\",\"nccl_num_channels\":\"16\"}}" > slow_prefill.log 2>&1 &
+    --kv-transfer-config "{\"kv_connector\":\"P2pNcclConnector\",\"kv_role\":\"kv_producer\",\"kv_buffer_size\":\"1e9\",\"kv_port\":\"$SLOW_PREFILL_KV_PORT\",\"kv_connector_extra_config\":{\"proxy_ip\":\"0.0.0.0\",\"proxy_port\":\"$SLOW_PROXY_PORT\",\"http_port\":\"$SLOW_PREFILL_PORT\",\"send_type\":\"PUT_ASYNC\",\"nccl_num_channels\":\"16\"}}" > slow_prefill.log 2>&1 &
 SLOW_PREFILL_PID=$!
 PIDS+=($SLOW_PREFILL_PID)
 echo "  ✓ Slow-lane prefill server started (PID: $SLOW_PREFILL_PID)"
@@ -174,7 +186,7 @@ CUDA_VISIBLE_DEVICES=$SLOW_DECODE_GPU $VLLM_BIN serve $MODEL \
     --disable-sliding-window \
     --no-enable-chunked-prefill \
     --kv-cache-dtype auto \
-    --kv-transfer-config "{\"kv_connector\":\"P2pNcclConnector\",\"kv_role\":\"kv_consumer\",\"kv_buffer_size\":\"1.4e10\",\"kv_port\":\"$SLOW_DECODE_KV_PORT\",\"kv_connector_extra_config\":{\"proxy_ip\":\"0.0.0.0\",\"proxy_port\":\"$PROXY_PORT\",\"http_port\":\"$SLOW_DECODE_PORT\",\"send_type\":\"PUT_ASYNC\",\"nccl_num_channels\":\"16\"}}" > slow_decode.log 2>&1 &
+    --kv-transfer-config "{\"kv_connector\":\"P2pNcclConnector\",\"kv_role\":\"kv_consumer\",\"kv_buffer_size\":\"1.4e10\",\"kv_port\":\"$SLOW_DECODE_KV_PORT\",\"kv_connector_extra_config\":{\"proxy_ip\":\"0.0.0.0\",\"proxy_port\":\"$SLOW_PROXY_PORT\",\"http_port\":\"$SLOW_DECODE_PORT\",\"send_type\":\"PUT_ASYNC\",\"nccl_num_channels\":\"16\"}}" > slow_decode.log 2>&1 &
 SLOW_DECODE_PID=$!
 PIDS+=($SLOW_DECODE_PID)
 echo "  ✓ Slow-lane decode server started (PID: $SLOW_DECODE_PID)"
@@ -216,45 +228,40 @@ echo "Waiting for fast-lane prefill server (port $FAST_PREFILL_PORT)..."
 if check_server_ready $FAST_PREFILL_PORT "fast-lane prefill" 120; then
     echo "  ✓ Fast-lane prefill server ready"
 else
-    echo "  ✗ Fast-lane prefill server failed to start. Check fast_prefill.log"
     tail -20 fast_prefill.log
-    exit 1
+    cleanup_and_exit "Fast-lane prefill server failed to start. Check fast_prefill.log"
 fi
 
 echo "Waiting for fast-lane decode server (port $FAST_DECODE_PORT)..."
 if check_server_ready $FAST_DECODE_PORT "fast-lane decode" 120; then
     echo "  ✓ Fast-lane decode server ready"
 else
-    echo "  ✗ Fast-lane decode server failed to start. Check fast_decode.log"
     tail -20 fast_decode.log
-    exit 1
+    cleanup_and_exit "Fast-lane decode server failed to start. Check fast_decode.log"
 fi
 
 echo "Waiting for slow-lane prefill server (port $SLOW_PREFILL_PORT)..."
 if check_server_ready $SLOW_PREFILL_PORT "slow-lane prefill" 120; then
     echo "  ✓ Slow-lane prefill server ready"
 else
-    echo "  ✗ Slow-lane prefill server failed to start. Check slow_prefill.log"
     tail -20 slow_prefill.log
-    exit 1
+    cleanup_and_exit "Slow-lane prefill server failed to start. Check slow_prefill.log"
 fi
 
 echo "Waiting for slow-lane decode server (port $SLOW_DECODE_PORT)..."
 if check_server_ready $SLOW_DECODE_PORT "slow-lane decode" 120; then
     echo "  ✓ Slow-lane decode server ready"
 else
-    echo "  ✗ Slow-lane decode server failed to start. Check slow_decode.log"
     tail -20 slow_decode.log
-    exit 1
+    cleanup_and_exit "Slow-lane decode server failed to start. Check slow_decode.log"
 fi
 
 echo "Waiting for proxy server (port $PROXY_HTTP_PORT)..."
 if check_server_ready $PROXY_HTTP_PORT "proxy" 30; then
     echo "  ✓ Proxy server ready"
 else
-    echo "  ✗ Proxy server failed to start. Check proxy.log"
     tail -20 proxy.log
-    exit 1
+    cleanup_and_exit "Proxy server failed to start. Check proxy.log"
 fi
 
 echo ""

@@ -153,7 +153,6 @@ CMD_SMALL=(
   --port "$PORT"
   --backend vllm
   --model "$MODEL"
-  --num-prompts 5000
   --tokenizer "$TOKENIZER"
   --ignore-eos
   --dataset-name "random"
@@ -190,7 +189,6 @@ CMD_LONG=(
   --port "$PORT"
   --backend vllm
   --model "$MODEL"
-  --num-prompts 50
   --tokenizer "$TOKENIZER"
   --ignore-eos
   --dataset-name "random"
