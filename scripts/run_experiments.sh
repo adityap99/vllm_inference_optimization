@@ -70,7 +70,7 @@ PROXY_HTTP_PORT="${VLLM_PORT}"
 
 # Python binary — reuse the conda env that startup.sh set SCRATCH_ROOT/CONDA_ENV for
 SCRATCH_ROOT="${SCRATCH_ROOT:-$HOME/scratch}"
-CONDA_ENV="${CONDA_ENV:-$SCRATCH_ROOT/envs/sysml_research4}"
+CONDA_ENV="${CONDA_ENV:-$SCRATCH_ROOT/sysml_research4}"
 if [[ -x "$CONDA_ENV/bin/python3" ]]; then
     PYTHON_BIN="$CONDA_ENV/bin/python3"
 else
@@ -365,7 +365,7 @@ log "Cooldown ${COOLDOWN}s..."
 sleep "$COOLDOWN"
 
 # ── Condition 2: light mixed load ────────────────────────────────────────────
-run_experiment "mixed" "$SCRIPTS_DIR/mixed_vllm_load.sh"
+run_experiment "mixed" "$SCRIPTS_DIR/mixed_condition.sh"
 log "Cooldown ${COOLDOWN}s..."
 sleep "$COOLDOWN"
 

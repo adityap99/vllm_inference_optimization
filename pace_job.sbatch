@@ -21,16 +21,16 @@
 #SBATCH --mem=256G
 #SBATCH --gres=gpu:H100:4              # Four H100 80GB (same node, NVSwitch)
 #                                      # Fallback: gpu:A100:4  (A100 80GB SXM4)
-#SBATCH --time=06:00:00                # 6h: allow for model load (~15 min) + all workloads
+#SBATCH --time=02:00:00                # 6h: allow for model load (~15 min) + all workloads
 
 # --- Partition / account -------------------------------------------------------
 # Uncomment and set the correct values for your PACE allocation.
 # ICE cluster (H100 nodes):   --cluster=ice  --partition=gpu    (or gpu-h100)
 # Phoenix cluster (A100 nodes): no --cluster flag, --partition=gpu-a100-p3
 #
-#SBATCH --partition=gpu-h100           # ← adjust for your cluster
+#SBATCH --partition=ice-gpu            # H100 nodes on ICE cluster
 ##SBATCH --cluster=ice                 # ← uncomment if submitting to ICE
-##SBATCH --account=YOUR_ACCOUNT        # ← uncomment and fill in if required
+#SBATCH --account=coc                  # PACE allocation account
 
 # --- Output / logging ----------------------------------------------------------
 #SBATCH --output=logs/slurm_%j.out    # stdout goes here
@@ -56,8 +56,8 @@ mkdir -p logs
 # --- Paths -------------------------------------------------------------------
 # PACE scratch is $SCRATCH or /storage/scratch1/$USER
 # Adjust SCRATCH_ROOT if your scratch path differs.
-export SCRATCH_ROOT="${SCRATCH:-/storage/scratch1/$USER}"
-export CONDA_ENV="${SCRATCH_ROOT}/envs/sysml_research4"
+export SCRATCH_ROOT="${SCRATCH_ROOT:-${SCRATCH:-/home/hice1/$USER/scratch}}"
+export CONDA_ENV="${SCRATCH_ROOT}/sysml_research4"
 
 # HuggingFace credential (set HF_TOKEN in your ~/.bashrc or pass via sbatch --export)
 # The model meta-llama/Llama-2-13b-hf requires a HF token with gated-model access.
@@ -67,6 +67,8 @@ if [[ -z "${HF_TOKEN:-}" ]]; then
     echo "  Or pass at submit:    sbatch --export=ALL,HF_TOKEN=hf_xxx pace_job.sbatch"
 fi
 export HF_HOME="${SCRATCH_ROOT}/huggingface_cache"
+export MODEL="${MODEL:-meta-llama/Llama-2-13b-hf}"
+export HF_HUB_DISABLE_XET=1   # prevent xet/CAS backend OOM during model load
 
 # --- Load system modules -----------------------------------------------------
 # PACE provides Anaconda via the module system. Adjust the module name if needed.
@@ -130,7 +132,7 @@ sleep 30
 
 export VLLM_HOST="localhost"
 export VLLM_PORT="10099"
-export VLLM_MODEL="$MODEL"
+export VLLM_MODEL="${MODEL}"
 
 echo "------------------------------------------------------------"
 echo "STEP 2: Running evaluation conditions via run_experiments.sh"

@@ -21,7 +21,7 @@
 # Activate conda environment
 # Set SCRATCH_ROOT to your HPC scratch directory (default: $HOME/scratch)
 SCRATCH_ROOT=${SCRATCH_ROOT:-$HOME/scratch}
-CONDA_ENV=${CONDA_ENV:-$SCRATCH_ROOT/envs/sysml_research4}
+CONDA_ENV=${CONDA_ENV:-$SCRATCH_ROOT/sysml_research4}
 export PATH="$CONDA_ENV/bin:$PATH"
 PYTHON_BIN="$CONDA_ENV/bin/python3"
 VLLM_BIN="$CONDA_ENV/bin/vllm"
@@ -37,6 +37,7 @@ PROXY_HTTP_PORT=${PROXY_HTTP_PORT:-10099}
 HF_CACHE_ROOT=${HF_CACHE_ROOT:-$SCRATCH_ROOT/huggingface_cache}
 mkdir -p "$HF_CACHE_ROOT"
 export HF_HOME="$HF_CACHE_ROOT"
+export HF_HUB_DISABLE_XET=1  # prevent xet/CAS backend OOM on compute nodes
 echo "HuggingFace cache set to: $HF_CACHE_ROOT (HF_HOME)"
 
 # Fast Lane PD pair (FP16, latency-optimized)
@@ -136,11 +137,11 @@ CUDA_VISIBLE_DEVICES=$FAST_DECODE_GPU $VLLM_BIN serve $MODEL \
     --max-num-seqs 32 \
     --max-model-len 4096 \
     --trust-remote-code \
-    --gpu-memory-utilization 0.6 \
+    --gpu-memory-utilization 0.7 \
     --disable-sliding-window \
     --no-enable-chunked-prefill \
     --kv-cache-dtype auto \
-    --kv-transfer-config "{\"kv_connector\":\"P2pNcclConnector\",\"kv_role\":\"kv_consumer\",\"kv_buffer_size\":\"1.4e10\",\"kv_port\":\"$FAST_DECODE_KV_PORT\",\"kv_connector_extra_config\":{\"proxy_ip\":\"0.0.0.0\",\"proxy_port\":\"$PROXY_PORT\",\"http_port\":\"$FAST_DECODE_PORT\",\"send_type\":\"PUT_ASYNC\",\"nccl_num_channels\":\"16\"}}" > fast_decode.log 2>&1 &
+    --kv-transfer-config "{\"kv_connector\":\"P2pNcclConnector\",\"kv_role\":\"kv_consumer\",\"kv_buffer_size\":\"4e9\",\"kv_port\":\"$FAST_DECODE_KV_PORT\",\"kv_connector_extra_config\":{\"proxy_ip\":\"0.0.0.0\",\"proxy_port\":\"$PROXY_PORT\",\"http_port\":\"$FAST_DECODE_PORT\",\"send_type\":\"PUT_ASYNC\",\"nccl_num_channels\":\"16\"}}" > fast_decode.log 2>&1 &
 FAST_DECODE_PID=$!
 PIDS+=($FAST_DECODE_PID)
 echo "  ✓ Fast-lane decode server started (PID: $FAST_DECODE_PID)"
@@ -171,6 +172,7 @@ echo "  ✓ Slow-lane prefill server started (PID: $SLOW_PREFILL_PID)"
 # =============================================================================
 # Launch Slow Lane Decode Server (GPU 3, BF16)
 # =============================================================================
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 echo "Starting slow-lane decode server on GPU $SLOW_DECODE_GPU..."
 CUDA_VISIBLE_DEVICES=$SLOW_DECODE_GPU $VLLM_BIN serve $MODEL \
     --enforce-eager \
@@ -186,7 +188,7 @@ CUDA_VISIBLE_DEVICES=$SLOW_DECODE_GPU $VLLM_BIN serve $MODEL \
     --disable-sliding-window \
     --no-enable-chunked-prefill \
     --kv-cache-dtype auto \
-    --kv-transfer-config "{\"kv_connector\":\"P2pNcclConnector\",\"kv_role\":\"kv_consumer\",\"kv_buffer_size\":\"1.4e10\",\"kv_port\":\"$SLOW_DECODE_KV_PORT\",\"kv_connector_extra_config\":{\"proxy_ip\":\"0.0.0.0\",\"proxy_port\":\"$SLOW_PROXY_PORT\",\"http_port\":\"$SLOW_DECODE_PORT\",\"send_type\":\"PUT_ASYNC\",\"nccl_num_channels\":\"16\"}}" > slow_decode.log 2>&1 &
+    --kv-transfer-config "{\"kv_connector\":\"P2pNcclConnector\",\"kv_role\":\"kv_consumer\",\"kv_buffer_size\":\"4e9\",\"kv_port\":\"$SLOW_DECODE_KV_PORT\",\"kv_connector_extra_config\":{\"proxy_ip\":\"0.0.0.0\",\"proxy_port\":\"$SLOW_PROXY_PORT\",\"http_port\":\"$SLOW_DECODE_PORT\",\"send_type\":\"PUT_ASYNC\",\"nccl_num_channels\":\"16\"}}" > slow_decode.log 2>&1 &
 SLOW_DECODE_PID=$!
 PIDS+=($SLOW_DECODE_PID)
 echo "  ✓ Slow-lane decode server started (PID: $SLOW_DECODE_PID)"
@@ -225,7 +227,7 @@ check_server_ready() {
 }
 
 echo "Waiting for fast-lane prefill server (port $FAST_PREFILL_PORT)..."
-if check_server_ready $FAST_PREFILL_PORT "fast-lane prefill" 120; then
+if check_server_ready $FAST_PREFILL_PORT "fast-lane prefill" $TIMEOUT_SECONDS; then
     echo "  ✓ Fast-lane prefill server ready"
 else
     tail -20 fast_prefill.log
@@ -233,7 +235,7 @@ else
 fi
 
 echo "Waiting for fast-lane decode server (port $FAST_DECODE_PORT)..."
-if check_server_ready $FAST_DECODE_PORT "fast-lane decode" 120; then
+if check_server_ready $FAST_DECODE_PORT "fast-lane decode" $TIMEOUT_SECONDS; then
     echo "  ✓ Fast-lane decode server ready"
 else
     tail -20 fast_decode.log
@@ -241,7 +243,7 @@ else
 fi
 
 echo "Waiting for slow-lane prefill server (port $SLOW_PREFILL_PORT)..."
-if check_server_ready $SLOW_PREFILL_PORT "slow-lane prefill" 120; then
+if check_server_ready $SLOW_PREFILL_PORT "slow-lane prefill" $TIMEOUT_SECONDS; then
     echo "  ✓ Slow-lane prefill server ready"
 else
     tail -20 slow_prefill.log
@@ -249,7 +251,7 @@ else
 fi
 
 echo "Waiting for slow-lane decode server (port $SLOW_DECODE_PORT)..."
-if check_server_ready $SLOW_DECODE_PORT "slow-lane decode" 120; then
+if check_server_ready $SLOW_DECODE_PORT "slow-lane decode" $TIMEOUT_SECONDS; then
     echo "  ✓ Slow-lane decode server ready"
 else
     tail -20 slow_decode.log

@@ -16,7 +16,8 @@ SMALL_NUM_PROMPTS=2000
 LONG_RPS=1.5
 LONG_IN=128
 LONG_OUT=3072   # longer outputs -> more KV growth
-LONG_NUM_PROMPTS=500
+LONG_NUM_PROMPTS=80  # 80/1.5=53s send; queue drains ~6-15 min depending on throughput
+                     # 500 caused walltime overrun (vllm bench waits for ALL responses)
 
 "${ROOT_DIR}/mixed_vllm_load.sh" \
   --host "${VLLM_HOST:-localhost}" \
