@@ -23,9 +23,9 @@
 #SBATCH --nodes=1                      # Must be 1: P2pNcclConnector requires same node
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=32             # 4 vLLM servers × ~6 cores + proxy + headroom
-#SBATCH --mem=192G                     # 7B model × 4 servers + system = ~80 GB; 192G safe
+#SBATCH --mem=128G                     # 7B model × 4 servers peak ~60 GB CPU RAM; 128G safe
 #SBATCH --gres=gpu:l40s:4             # Four L40S 48 GB GPUs on a single node
-#SBATCH --time=02:00:00               # Same walltime as H100 run; 7B loads faster
+#SBATCH --time=01:30:00               # 1.5h: model load (~5 min) + all workloads (~62 min) + buffer
 
 # --- Partition / account -------------------------------------------------------
 #SBATCH --partition=ice-gpu            # L40S nodes are in ice-gpu (and coc-gpu)
