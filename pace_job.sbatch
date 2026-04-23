@@ -17,11 +17,11 @@
 #SBATCH --job-name=vllm-migration
 #SBATCH --nodes=1                      # Must be 1: NVSwitch P2P KV transfers require same node
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=64             # 4 vLLM servers × ~12 cores + proxy + headroom
-#SBATCH --mem=256G
+#SBATCH --cpus-per-task=32             # 4 vLLM servers × ~6-8 cores (TP=1, eager) + proxy + headroom
+#SBATCH --mem=160G
 #SBATCH --gres=gpu:H100:4              # Four H100 80GB (same node, NVSwitch)
 #                                      # Fallback: gpu:A100:4  (A100 80GB SXM4)
-#SBATCH --time=02:00:00                # 6h: allow for model load (~15 min) + all workloads
+#SBATCH --time=02:00:00                # 2h: allow for model load (~8 min) + all workloads
 
 # --- Partition / account -------------------------------------------------------
 # Uncomment and set the correct values for your PACE allocation.
