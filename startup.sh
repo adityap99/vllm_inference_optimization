@@ -40,6 +40,11 @@ export HF_HOME="$HF_CACHE_ROOT"
 export HF_HUB_DISABLE_XET=1  # prevent xet/CAS backend OOM on compute nodes
 echo "HuggingFace cache set to: $HF_CACHE_ROOT (HF_HOME)"
 
+# LOG_DIR: directory where server logs land.  Defaults to CWD (repo root).
+# Set LOG_DIR in the sbatch to isolate logs for concurrent jobs.
+LOG_DIR="${LOG_DIR:-$(pwd)}"
+mkdir -p "$LOG_DIR"
+
 # Fast Lane PD pair (FP16, latency-optimized)
 FAST_PREFILL_GPU=${FAST_PREFILL_GPU:-0}
 FAST_DECODE_GPU=${FAST_DECODE_GPU:-1}
@@ -90,7 +95,7 @@ cleanup_and_exit() {
 # Launch Migration-Aware Proxy Server
 # =============================================================================
 echo "Starting migration-aware proxy server..."
-PROXY_PORT=$PROXY_PORT SLOW_PROXY_PORT=$SLOW_PROXY_PORT PROXY_HTTP_PORT=$PROXY_HTTP_PORT MODEL=$MODEL $PYTHON_BIN disagg_proxy_migration.py > proxy.log 2>&1 &
+PROXY_PORT=$PROXY_PORT SLOW_PROXY_PORT=$SLOW_PROXY_PORT PROXY_HTTP_PORT=$PROXY_HTTP_PORT MODEL=$MODEL $PYTHON_BIN disagg_proxy_migration.py > "$LOG_DIR/proxy.log" 2>&1 &
 PROXY_PID=$!
 PIDS+=($PROXY_PID)
 echo "  ✓ Proxy server started (PID: $PROXY_PID)"
@@ -116,7 +121,7 @@ CUDA_VISIBLE_DEVICES=$FAST_PREFILL_GPU $VLLM_BIN serve $MODEL \
     --disable-sliding-window \
     --no-enable-chunked-prefill \
     --kv-cache-dtype auto \
-    --kv-transfer-config "{\"kv_connector\":\"P2pNcclConnector\",\"kv_role\":\"kv_producer\",\"kv_buffer_size\":\"1e9\",\"kv_port\":\"$FAST_PREFILL_KV_PORT\",\"kv_connector_extra_config\":{\"proxy_ip\":\"0.0.0.0\",\"proxy_port\":\"$PROXY_PORT\",\"http_port\":\"$FAST_PREFILL_PORT\",\"send_type\":\"PUT_ASYNC\",\"nccl_num_channels\":\"16\"}}" > fast_prefill.log 2>&1 &
+    --kv-transfer-config "{\"kv_connector\":\"P2pNcclConnector\",\"kv_role\":\"kv_producer\",\"kv_buffer_size\":\"1e9\",\"kv_port\":\"$FAST_PREFILL_KV_PORT\",\"kv_connector_extra_config\":{\"proxy_ip\":\"0.0.0.0\",\"proxy_port\":\"$PROXY_PORT\",\"http_port\":\"$FAST_PREFILL_PORT\",\"send_type\":\"PUT_ASYNC\",\"nccl_num_channels\":\"16\"}}" > "$LOG_DIR/fast_prefill.log" 2>&1 &
 FAST_PREFILL_PID=$!
 PIDS+=($FAST_PREFILL_PID)
 echo "  ✓ Fast-lane prefill server started (PID: $FAST_PREFILL_PID)"
@@ -141,7 +146,7 @@ CUDA_VISIBLE_DEVICES=$FAST_DECODE_GPU $VLLM_BIN serve $MODEL \
     --disable-sliding-window \
     --no-enable-chunked-prefill \
     --kv-cache-dtype auto \
-    --kv-transfer-config "{\"kv_connector\":\"P2pNcclConnector\",\"kv_role\":\"kv_consumer\",\"kv_buffer_size\":\"4e9\",\"kv_port\":\"$FAST_DECODE_KV_PORT\",\"kv_connector_extra_config\":{\"proxy_ip\":\"0.0.0.0\",\"proxy_port\":\"$PROXY_PORT\",\"http_port\":\"$FAST_DECODE_PORT\",\"send_type\":\"PUT_ASYNC\",\"nccl_num_channels\":\"16\"}}" > fast_decode.log 2>&1 &
+    --kv-transfer-config "{\"kv_connector\":\"P2pNcclConnector\",\"kv_role\":\"kv_consumer\",\"kv_buffer_size\":\"4e9\",\"kv_port\":\"$FAST_DECODE_KV_PORT\",\"kv_connector_extra_config\":{\"proxy_ip\":\"0.0.0.0\",\"proxy_port\":\"$PROXY_PORT\",\"http_port\":\"$FAST_DECODE_PORT\",\"send_type\":\"PUT_ASYNC\",\"nccl_num_channels\":\"16\"}}" > "$LOG_DIR/fast_decode.log" 2>&1 &
 FAST_DECODE_PID=$!
 PIDS+=($FAST_DECODE_PID)
 echo "  ✓ Fast-lane decode server started (PID: $FAST_DECODE_PID)"
@@ -164,7 +169,7 @@ CUDA_VISIBLE_DEVICES=$SLOW_PREFILL_GPU $VLLM_BIN serve $MODEL \
     --disable-sliding-window \
     --no-enable-chunked-prefill \
     --kv-cache-dtype auto \
-    --kv-transfer-config "{\"kv_connector\":\"P2pNcclConnector\",\"kv_role\":\"kv_producer\",\"kv_buffer_size\":\"1e9\",\"kv_port\":\"$SLOW_PREFILL_KV_PORT\",\"kv_connector_extra_config\":{\"proxy_ip\":\"0.0.0.0\",\"proxy_port\":\"$SLOW_PROXY_PORT\",\"http_port\":\"$SLOW_PREFILL_PORT\",\"send_type\":\"PUT_ASYNC\",\"nccl_num_channels\":\"16\"}}" > slow_prefill.log 2>&1 &
+    --kv-transfer-config "{\"kv_connector\":\"P2pNcclConnector\",\"kv_role\":\"kv_producer\",\"kv_buffer_size\":\"1e9\",\"kv_port\":\"$SLOW_PREFILL_KV_PORT\",\"kv_connector_extra_config\":{\"proxy_ip\":\"0.0.0.0\",\"proxy_port\":\"$SLOW_PROXY_PORT\",\"http_port\":\"$SLOW_PREFILL_PORT\",\"send_type\":\"PUT_ASYNC\",\"nccl_num_channels\":\"16\"}}" > "$LOG_DIR/slow_prefill.log" 2>&1 &
 SLOW_PREFILL_PID=$!
 PIDS+=($SLOW_PREFILL_PID)
 echo "  ✓ Slow-lane prefill server started (PID: $SLOW_PREFILL_PID)"
@@ -188,14 +193,14 @@ CUDA_VISIBLE_DEVICES=$SLOW_DECODE_GPU $VLLM_BIN serve $MODEL \
     --disable-sliding-window \
     --no-enable-chunked-prefill \
     --kv-cache-dtype auto \
-    --kv-transfer-config "{\"kv_connector\":\"P2pNcclConnector\",\"kv_role\":\"kv_consumer\",\"kv_buffer_size\":\"4e9\",\"kv_port\":\"$SLOW_DECODE_KV_PORT\",\"kv_connector_extra_config\":{\"proxy_ip\":\"0.0.0.0\",\"proxy_port\":\"$SLOW_PROXY_PORT\",\"http_port\":\"$SLOW_DECODE_PORT\",\"send_type\":\"PUT_ASYNC\",\"nccl_num_channels\":\"16\"}}" > slow_decode.log 2>&1 &
+    --kv-transfer-config "{\"kv_connector\":\"P2pNcclConnector\",\"kv_role\":\"kv_consumer\",\"kv_buffer_size\":\"4e9\",\"kv_port\":\"$SLOW_DECODE_KV_PORT\",\"kv_connector_extra_config\":{\"proxy_ip\":\"0.0.0.0\",\"proxy_port\":\"$SLOW_PROXY_PORT\",\"http_port\":\"$SLOW_DECODE_PORT\",\"send_type\":\"PUT_ASYNC\",\"nccl_num_channels\":\"16\"}}" > "$LOG_DIR/slow_decode.log" 2>&1 &
 SLOW_DECODE_PID=$!
 PIDS+=($SLOW_DECODE_PID)
 echo "  ✓ Slow-lane decode server started (PID: $SLOW_DECODE_PID)"
 
 echo ""
 echo "All servers launched. Waiting for initialization..."
-echo "Log files: fast_prefill.log, fast_decode.log, slow_prefill.log, slow_decode.log, proxy.log"
+echo "Log files: $LOG_DIR/{fast_prefill,fast_decode,slow_prefill,slow_decode,proxy}.log"
 echo ""
 
 # =============================================================================
@@ -231,7 +236,7 @@ if check_server_ready $FAST_PREFILL_PORT "fast-lane prefill" $TIMEOUT_SECONDS; t
     echo "  ✓ Fast-lane prefill server ready"
 else
     tail -20 fast_prefill.log
-    cleanup_and_exit "Fast-lane prefill server failed to start. Check fast_prefill.log"
+    cleanup_and_exit "Fast-lane prefill server failed to start. Check $LOG_DIR/fast_prefill.log"
 fi
 
 echo "Waiting for fast-lane decode server (port $FAST_DECODE_PORT)..."
@@ -239,7 +244,7 @@ if check_server_ready $FAST_DECODE_PORT "fast-lane decode" $TIMEOUT_SECONDS; the
     echo "  ✓ Fast-lane decode server ready"
 else
     tail -20 fast_decode.log
-    cleanup_and_exit "Fast-lane decode server failed to start. Check fast_decode.log"
+    cleanup_and_exit "Fast-lane decode server failed to start. Check $LOG_DIR/fast_decode.log"
 fi
 
 echo "Waiting for slow-lane prefill server (port $SLOW_PREFILL_PORT)..."
@@ -247,7 +252,7 @@ if check_server_ready $SLOW_PREFILL_PORT "slow-lane prefill" $TIMEOUT_SECONDS; t
     echo "  ✓ Slow-lane prefill server ready"
 else
     tail -20 slow_prefill.log
-    cleanup_and_exit "Slow-lane prefill server failed to start. Check slow_prefill.log"
+    cleanup_and_exit "Slow-lane prefill server failed to start. Check $LOG_DIR/slow_prefill.log"
 fi
 
 echo "Waiting for slow-lane decode server (port $SLOW_DECODE_PORT)..."
@@ -255,7 +260,7 @@ if check_server_ready $SLOW_DECODE_PORT "slow-lane decode" $TIMEOUT_SECONDS; the
     echo "  ✓ Slow-lane decode server ready"
 else
     tail -20 slow_decode.log
-    cleanup_and_exit "Slow-lane decode server failed to start. Check slow_decode.log"
+    cleanup_and_exit "Slow-lane decode server failed to start. Check $LOG_DIR/slow_decode.log"
 fi
 
 echo "Waiting for proxy server (port $PROXY_HTTP_PORT)..."
@@ -263,7 +268,7 @@ if check_server_ready $PROXY_HTTP_PORT "proxy" 30; then
     echo "  ✓ Proxy server ready"
 else
     tail -20 proxy.log
-    cleanup_and_exit "Proxy server failed to start. Check proxy.log"
+    cleanup_and_exit "Proxy server failed to start. Check $LOG_DIR/proxy.log"
 fi
 
 echo ""

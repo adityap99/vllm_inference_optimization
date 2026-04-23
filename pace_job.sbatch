@@ -133,6 +133,10 @@ sleep 30
 export VLLM_HOST="localhost"
 export VLLM_PORT="10099"
 export VLLM_MODEL="${MODEL}"
+# Per-job directories so concurrent jobs don't overwrite each other's logs/results
+export LOG_DIR="logs/job_${SLURM_JOB_ID}"
+export PROXY_LOG="$LOG_DIR/proxy.log"
+mkdir -p "$LOG_DIR"
 
 echo "------------------------------------------------------------"
 echo "STEP 2: Running evaluation conditions via run_experiments.sh"
